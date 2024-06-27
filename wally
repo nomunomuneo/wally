@@ -1,0 +1,192 @@
+#! /usr/bin/python
+from pathlib import Path
+import curses, os, toml, argparse
+
+# Default formats to display (add or modify as needed)
+formats = [".png", ".jpg", ".jpeg", ".bmp", ".webp"]
+
+def load_config(config_path):
+    """
+    Load configuration from a TOML file.
+
+    Args:
+    - config_path (str): Path to the TOML configuration file.
+
+    Returns:
+    - dict: Configuration data loaded from the file.
+    """
+    try:
+        with open(config_path, "r") as f:
+            config = toml.load(f)
+    except FileNotFoundError:
+        print(f"Config file '{config_path}' not found.")
+        raise
+    except Exception as e:
+        print(f"Error loading config file '{config_path}': {e}")
+        raise
+    return config
+
+def save_config(config_path, config_data):
+    """
+    Save configuration data to a TOML file.
+
+    Args:
+    - config_path (str): Path to the TOML configuration file.
+    - config_data (dict): Configuration data to be saved.
+    """
+    try:
+        with open(config_path, "w") as f:
+            toml.dump(config_data, f)
+    except Exception as e:
+        print(f"Error saving config file '{config_path}': {e}")
+        raise
+
+def get_files(target_path):
+    """
+    Retrieve files in the target directory.
+
+    Args:
+    - target_path (str): Path to the target directory.
+
+    Returns:
+    - list: List of Path objects representing files in the directory.
+    """
+    target_path = Path(target_path).resolve()
+    try:
+        files = list(target_path.iterdir())
+    except OSError:
+        files = []
+    return files
+
+def save_wallpaper(wallpaper_path, config_data):
+    """
+    Save wallpaper path to configuration data.
+
+    Args:
+    - wallpaper_path (str): Path to the wallpaper file.
+    - config_data (dict): Current configuration data.
+
+    Returns:
+    - dict: Updated configuration data with wallpaper path.
+    """
+    config_data['wallpaper']["restore_path"] = wallpaper_path
+    return config_data
+
+def restore_wallpaper(config_data):
+    """
+    Restore wallpaper based on configuration data.
+
+    Args:
+    - config_data (dict): Configuration data containing wallpaper information.
+    """
+    restore_path = config_data.get('wallpaper', {}).get('restore_path', '')
+    set_command = config_data.get('wallpaper', {}).get('set_command', '')
+
+    if restore_path and set_command:
+        wallpaper_cmd = set_command.format(file=restore_path)
+        os.system(f"killall {wallpaper_cmd.split(' ')[0]}")  # Kill existing instances
+        os.system(f"{wallpaper_cmd} & disown")
+    else:
+        print("No wallpaper restore path or set command found in the configuration.")
+
+def main(stdscr, start_folder, config_path):
+    """
+    Main function for the curses-based file browser.
+
+    Args:
+    - stdscr: Standard screen object from curses.
+    - start_folder (str): Starting folder for browsing.
+    - config_path (str): Path to the TOML configuration file.
+    """
+    curses.curs_set(0)
+    curses.use_default_colors()
+    stdscr.clear()
+
+    max_y, max_x = stdscr.getmaxyx()
+    path_stack = [Path(start_folder).resolve()]
+    selected = 0
+    top_line = 0
+
+    config = load_config(config_path)
+    wallpaper_command = config.get('wallpaper', {}).get('set_command', '')
+
+    try:
+        while True:
+            current_path = path_stack[-1]
+            files = get_files(current_path)
+
+            stdscr.clear()
+
+            # Display files within visible range
+            for i, file in enumerate(files[top_line:top_line + max_y]):
+                file_name = str(file).split('/')[-1]
+                if i == selected - top_line:
+                    stdscr.addstr(i, 0, file_name, curses.A_BOLD)
+                else:
+                    stdscr.addstr(i, 0, file_name)
+
+            stdscr.refresh()
+
+            key = stdscr.getkey()
+
+            if key in ['q', 'Q']:
+                break
+            elif key == "KEY_DOWN" or key == "j":
+                if selected < len(files) - 1:
+                    selected += 1
+                    if selected >= top_line + max_y:
+                        top_line += 1
+                else:
+                    selected = 0
+                    top_line = 0
+            elif key == "KEY_UP" or key == "k":
+                if selected > 0:
+                    selected -= 1
+                    if selected < top_line:
+                        top_line -= 1
+                elif selected == 0:
+                    selected = len(files) - 1
+                    top_line = max(0, len(files) - max_y)
+            elif key == "KEY_LEFT" or key == "h":
+                if len(path_stack) > 1:
+                    path_stack.pop()  # Go up one level in the directory hierarchy
+                    selected = min(selected, len(files) - 1)  # Ensure selected index is within bounds
+                    top_line = max(0, min(top_line, len(files) - max_y))
+            elif key == "KEY_RIGHT" or key == "l":
+                if files[selected].is_dir():
+                    path_stack.append(files[selected].resolve())
+                    selected = 0  # Reset selection to top when navigating into a directory
+                    top_line = 0
+                else:
+                    if files[selected].suffix in formats and wallpaper_command:
+                        config = save_wallpaper(str(files[selected]), config)
+                        save_config(config_path, config)
+                        wallpaper_cmd = wallpaper_command.format(file=files[selected])
+                        os.system(f"killall {wallpaper_cmd.split(' ')[0]}")  # Kill existing instances
+                        os.system(f"{wallpaper_cmd} & disown")
+            else:
+                pass
+
+    except KeyboardInterrupt:
+        pass  # Handle Ctrl+C gracefully
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="a simple curses-based utility to set wallpaper")
+    parser.add_argument('-f', '--folder', metavar='FOLDER', type=str, default='.', help='Folder to start browsing')
+    parser.add_argument('-c', '--config', metavar='CONFIG_FILE', type=str, default='', help='Path to configuration file (TOML format)')
+    parser.add_argument('-r', '--restore', action='store_true', help='Restore wallpaper on boot')
+    args = parser.parse_args()
+
+    if args.config:
+        config_path = args.config
+    else:
+        config_path = os.path.expanduser('~/.config/wally/config.toml')
+        if not os.path.exists(config_path):
+            config_path = 'config.toml'
+
+    if args.restore:
+        config = load_config(config_path)
+        restore_wallpaper(config)
+        exit(0)
+
+    curses.wrapper(main, args.folder, config_path)

@@ -85,6 +85,8 @@ def restore_wallpaper(config_data):
     if restore_path and set_command:
         wallpaper_cmd = set_command.format(file=restore_path)
         os.system(f"killall {wallpaper_cmd.split(' ')[0]}")  # Kill existing instances
+        if args.wallust:
+            os.system(f"wallust  run --quiet {restore_path}")
         os.system(f"{wallpaper_cmd} & disown")
     else:
         print("No wallpaper restore path or set command found in the configuration.")
@@ -164,6 +166,8 @@ def main(stdscr, start_folder, config_path):
                         wallpaper_cmd = wallpaper_command.format(file=files[selected])
                         os.system(f"killall {wallpaper_cmd.split(' ')[0]}")  # Kill existing instances
                         os.system(f"{wallpaper_cmd} & disown")
+                        if args.wallust:
+                            os.system(f"wallust  run --quiet {str(files[selected])} & pywalfox update")
             else:
                 pass
 
@@ -175,7 +179,9 @@ if __name__ == "__main__":
     parser.add_argument('-f', '--folder', metavar='FOLDER', type=str, default='.', help='Folder to start browsing')
     parser.add_argument('-c', '--config', metavar='CONFIG_FILE', type=str, default='', help='Path to configuration file (TOML format)')
     parser.add_argument('-r', '--restore', action='store_true', help='Restore wallpaper on boot')
+    parser.add_argument('-w', '--wallust', action='store_true', help='Apply a colorscheme from image using wallust')
     args = parser.parse_args()
+
 
     if args.config:
         config_path = args.config
@@ -188,5 +194,18 @@ if __name__ == "__main__":
         config = load_config(config_path)
         restore_wallpaper(config)
         exit(0)
+        
+    if args.folder:
+        file = Path(args.folder).resolve()
+        config = load_config(config_path)
+        if file.is_file():
+            config = save_wallpaper(str(file), config)
+            save_config(config_path, config)
+            wallpaper_cmd = config.get('wallpaper', {}).get('set_command', '').format(file=file)
+            os.system(f"killall {wallpaper_cmd.split(' ')[0]}")  # Kill existing instances
+            os.system(f"{wallpaper_cmd} & disown")
+            if args.wallust:
+                os.system(f"wallust  run --quiet {str(file)}")
+            exit(0)
 
     curses.wrapper(main, args.folder, config_path)
